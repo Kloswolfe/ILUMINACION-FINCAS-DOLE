@@ -2,13 +2,16 @@ import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import { Supervisor, FarmMapRecord, CropCategory } from '../types';
 import { extractFarmNameFromFileName, deriveCleanFileName } from '../utils/farmName';
 import { optimizeImageDataUrl } from '../utils/imageUtils';
+import { resolveFilesAndZips } from '../utils/zipExtractor';
 import { 
   X, 
   UploadCloud, 
   Check, 
   AlertCircle, 
   FileText, 
-  ArrowRight
+  ArrowRight,
+  FolderArchive,
+  Loader2
 } from 'lucide-react';
 import { ThemeConfig } from '../utils/theme';
 
@@ -71,41 +74,60 @@ export function BatchUploadModal({
 
   const loadFiles = async (files: FileList | File[]) => {
     setError(null);
-    const fileArray = Array.from(files);
-    if (fileArray.length === 0) return;
+    const rawList = Array.from(files);
+    if (rawList.length === 0) return;
 
     setIsProcessing(true);
 
-    // Read all files as base64 and extract farm name directly from file name
-    const newItems: BatchItem[] = [];
-    for (let i = 0; i < fileArray.length; i++) {
-      const file = fileArray[i];
-      const rawDataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-      const dataUrl = await optimizeImageDataUrl(rawDataUrl);
+    try {
+      // Extrae imágenes de archivos comprimidos .zip (incluso si están dentro de subcarpetas como pdf/)
+      const { imageFiles, extractedCount, zipCount } = await resolveFilesAndZips(rawList);
 
-      const farmName = extractFarmNameFromFileName(file.name);
-      const isPineapple = 
-        file.name.toLowerCase().includes('piña') || 
-        file.name.toLowerCase().includes('pina') || 
-        currentSupervisor?.category.includes('Piña');
+      if (imageFiles.length === 0) {
+        if (zipCount > 0) {
+          setError('No se encontraron imágenes compatibles (.png, .jpg, .webp) dentro del archivo comprimido.');
+        } else {
+          setError('No se encontraron archivos de imagen válidos.');
+        }
+        setIsProcessing(false);
+        return;
+      }
 
-      newItems.push({
-        id: `batch-${Date.now()}-${i}`,
-        originalFileName: file.name,
-        dataUrl,
-        farmName,
-        renamedFileName: deriveCleanFileName(farmName, file.name),
-        status: 'done',
-        cropCategory: isPineapple ? 'Fincas de Piñas y banano' : (currentSupervisor?.category || 'Fincas de Banano'),
-      });
+      // Read all files as base64 and extract farm name directly from file name
+      const newItems: BatchItem[] = [];
+      for (let i = 0; i < imageFiles.length; i++) {
+        const file = imageFiles[i];
+        const rawDataUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+        const dataUrl = await optimizeImageDataUrl(rawDataUrl);
+
+        const farmName = extractFarmNameFromFileName(file.name);
+        const isPineapple = 
+          file.name.toLowerCase().includes('piña') || 
+          file.name.toLowerCase().includes('pina') || 
+          currentSupervisor?.category.includes('Piña');
+
+        newItems.push({
+          id: `batch-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 4)}`,
+          originalFileName: file.name,
+          dataUrl,
+          farmName,
+          renamedFileName: deriveCleanFileName(farmName, file.name),
+          status: 'done',
+          cropCategory: isPineapple ? 'Fincas de Piñas y banano' : (currentSupervisor?.category || 'Fincas de Banano'),
+        });
+      }
+
+      setItems((prev) => [...prev, ...newItems]);
+    } catch (err: any) {
+      console.error('Error al procesar archivos/comprimidos:', err);
+      setError('Ocurrió un error al procesar las imágenes o descomprimir la carpeta.');
+    } finally {
+      setIsProcessing(false);
     }
-
-    setItems((prev) => [...prev, ...newItems]);
-    setIsProcessing(false);
   };
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -254,26 +276,35 @@ export function BatchUploadModal({
             </div>
           </div>
 
-          {/* Dropzone para selección por grupo */}
+          {/* Dropzone para selección por grupo o carpeta comprimida .ZIP */}
           <div
             onClick={() => fileInputRef.current?.click()}
-            className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-5 text-center cursor-pointer transition-colors hover:bg-slate-50"
+            className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-5 text-center cursor-pointer transition-colors hover:bg-slate-50 relative group"
           >
             <input
               ref={fileInputRef}
               type="file"
               multiple
-              accept="image/*"
+              accept="image/*,.zip,application/zip,application/x-zip-compressed"
               onChange={handleFileChange}
               className="hidden"
             />
-            <UploadCloud className="w-8 h-8 text-slate-400 mx-auto mb-1.5" />
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <UploadCloud className="w-7 h-7 text-slate-400 group-hover:text-blue-500 transition-colors" />
+              <FolderArchive className="w-6 h-6 text-amber-500" />
+            </div>
             <p className="text-xs font-bold text-slate-800">
-              Haz clic o arrastra un GRUPO de imágenes aquí
+              Haz clic o arrastra fotos individuales, grupo de imágenes o carpeta comprimida (.ZIP)
             </p>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Puedes seleccionar 2, 5 o más fotos al mismo tiempo. El nombre de cada finca se asignará directamente según su foto.
+            <p className="text-[11px] text-slate-500 mt-1 max-w-lg mx-auto">
+              Soporta archivos <span className="font-semibold text-slate-700">.ZIP</span> con carpetas de imágenes (ej. carpeta PDF de planos/mapas). La aplicación extraerá automáticamente todas las imágenes (.png, .jpg, .webp) y detectará el nombre de cada finca.
             </p>
+            {isProcessing && (
+              <div className="mt-3 flex items-center justify-center gap-2 text-xs font-bold text-blue-600 animate-pulse">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Extrayendo y procesando imágenes...</span>
+              </div>
+            )}
           </div>
 
           {/* Lista de archivos del grupo con su nuevo nombre asignado */}

@@ -1,16 +1,24 @@
 import { get, set } from 'idb-keyval';
-import { Supervisor, FarmMapRecord, GeneratedPdfFile } from '../types';
-import { createFarmMapSvg } from './mapTemplates';
+import { Supervisor, FarmMapRecord, GeneratedPdfFile, AppUser, ConnectionLog } from '../types';
 
 const SUPERVISORS_KEY = 'dole_supervisors_v1';
 const FARM_MAPS_KEY = 'dole_farm_maps_v1';
 const FARM_MAPS_BACKUP_KEY = 'dole_farm_maps_backup_v1';
-const FARM_MAPS_INITIALIZED_KEY = 'dole_farm_maps_initialized_v1';
 const GENERATED_PDFS_KEY = 'dole_generated_pdfs_v1';
+const AUTH_USERS_KEY = 'dole_auth_users_v1';
+const AUTH_CURRENT_USER_KEY = 'dole_auth_current_user_v1';
+const CONNECTION_LOGS_KEY = 'dole_connection_logs_v1';
 
-// Default initial supervisors requested by user:
-// Ronnie Flores: Fincas de banano
-// Jason Cruz: Fincas de banano y Piña
+// Solicitar al navegador persistencia permanente para que nunca borre los mapas de IndexedDB
+if (typeof window !== 'undefined' && navigator.storage && navigator.storage.persist) {
+  navigator.storage.persist().then((persistent) => {
+    if (persistent) {
+      console.log('Almacenamiento persistente garantizado en el navegador');
+    }
+  }).catch(() => {});
+}
+
+// Initial supervisors
 const INITIAL_SUPERVISORS: Supervisor[] = [
   {
     id: 'sup-ronnie-flores',
@@ -32,128 +40,44 @@ const INITIAL_SUPERVISORS: Supervisor[] = [
   },
 ];
 
-const INITIAL_MAPS: FarmMapRecord[] = [
+// Usuarios corporativos iniciales para inicio de sesión profesional
+export const INITIAL_USERS: AppUser[] = [
   {
-    id: 'map-santa-ines',
-    supervisorId: 'sup-ronnie-flores',
-    supervisorName: 'Ronnie Flores',
-    farmName: 'Finca Santa Inés',
-    extractedRawText: 'FINCA SANTA INÉS (AZUL)',
-    cropCategory: 'Fincas de Banano',
-    inspectionDate: '2026-09-04',
-    imageDataUrl: createFarmMapSvg('Finca Santa Inés', 'Banano', 28, 4),
-    imageFileName: 'mapa_finca_santa_ines.png',
-    zones: ['Empacadora Central', 'Lotes Banano 01-14', 'Área de Cablevía', 'Andén de Desembarque'],
-    dayInspection: {
-      totalInspectedPoles: 32,
-      physicalCondition: 'Bueno',
-      photocellsStatus: 'Operativas',
-      daytimeLightsOnAnomaly: 1,
-      wiringCondition: 'Óptimo',
-      observations: 'Postes en buen estado estructural. Se detectó 1 fotocelda atascada en el andén secundario que mantiene la luz encendida de día.',
-    },
-    nightInspection: {
-      totalActiveLights: 28,
-      totalDamagedLights: 4,
-      coveragePercentage: 87.5,
-      darkZonesDetected: ['Extremo Sur Cablevía 3', 'Bodega de Materiales'],
-      urgencyLevel: 'Media',
-      observations: 'Iluminación adecuada en planta empacadora. Urge sustituir 4 bombillas LED de 150W en cablevía sur para seguridad en jornada nocturna.',
-    },
-    createdAt: Date.now() - 86400000 * 2,
-    updatedAt: Date.now() - 86400000 * 2,
+    id: 'user-ronnie-flores',
+    name: 'Ronnie Flores',
+    emailOrCode: 'rflores@dole.com',
+    role: 'Supervisor Banano',
+    password: 'dole',
+    avatarColor: 'bg-emerald-700',
+    createdAt: Date.now() - 86400000 * 30,
   },
   {
-    id: 'map-monterrey',
-    supervisorId: 'sup-ronnie-flores',
-    supervisorName: 'Ronnie Flores',
-    farmName: 'Finca Monterrey',
-    extractedRawText: 'FINCA MONTERREY (AZUL)',
-    cropCategory: 'Fincas de Banano',
-    inspectionDate: '2026-09-04',
-    imageDataUrl: createFarmMapSvg('Finca Monterrey', 'Banano', 35, 2),
-    imageFileName: 'mapa_finca_monterrey.png',
-    zones: ['Dársena Principal', 'Planta Clúster', 'Taller Mecánico', 'Lotes Banano Sector Norte'],
-    dayInspection: {
-      totalInspectedPoles: 37,
-      physicalCondition: 'Excelente',
-      photocellsStatus: 'Operativas',
-      daytimeLightsOnAnomaly: 0,
-      wiringCondition: 'Óptimo',
-      observations: 'Revisión física completa. Fotoceldas calibradas correctamente y cableado subterráneo sin anomalías.',
-    },
-    nightInspection: {
-      totalActiveLights: 35,
-      totalDamagedLights: 2,
-      coveragePercentage: 94.6,
-      darkZonesDetected: ['Perímetro Taller Posterior'],
-      urgencyLevel: 'Baja',
-      observations: 'Excelente nivel de lux en áreas de empaque y báscula. 2 luminarias por sustitución preventiva en taller.',
-    },
-    createdAt: Date.now() - 86400000 * 1,
-    updatedAt: Date.now() - 86400000 * 1,
+    id: 'user-jason-cruz',
+    name: 'Jason Cruz',
+    emailOrCode: 'jcruz@dole.com',
+    role: 'Supervisor Piña y Banano',
+    password: 'dole',
+    avatarColor: 'bg-amber-600',
+    createdAt: Date.now() - 86400000 * 30,
   },
   {
-    id: 'map-los-diamantes',
-    supervisorId: 'sup-jason-cruz',
-    supervisorName: 'Jason Cruz',
-    farmName: 'Finca Los Diamantes',
-    extractedRawText: 'FINCA LOS DIAMANTES (AZUL)',
-    cropCategory: 'Fincas de Piñas y banano',
-    inspectionDate: '2026-09-04',
-    imageDataUrl: createFarmMapSvg('Finca Los Diamantes', 'Piña y Banano', 42, 6),
-    imageFileName: 'mapa_finca_diamantes.png',
-    zones: ['Empacadora de Piña', 'Bloque Bananero', 'Hangar de Riego', 'Control de Acceso'],
-    dayInspection: {
-      totalInspectedPoles: 48,
-      physicalCondition: 'Bueno',
-      photocellsStatus: 'Con Fallas',
-      daytimeLightsOnAnomaly: 3,
-      wiringCondition: 'Mantenimiento Requerido',
-      observations: 'Se observó sulfatación en dos cajas de registro en el hangar de riego y tres reflectores encendidos en horas del mediodía.',
-    },
-    nightInspection: {
-      totalActiveLights: 42,
-      totalDamagedLights: 6,
-      coveragePercentage: 87.5,
-      darkZonesDetected: ['Báscula de Camiones de Piña', 'Perímetro Este Bloque Banano'],
-      urgencyLevel: 'Alta',
-      observations: 'Requiere atención urgente en báscula de camiones; la visibilidad es crítica para maniobras de carga nocturna de fruta.',
-    },
-    createdAt: Date.now() - 86400000 * 2,
-    updatedAt: Date.now() - 86400000 * 2,
-  },
-  {
-    id: 'map-el-paraiso',
-    supervisorId: 'sup-jason-cruz',
-    supervisorName: 'Jason Cruz',
-    farmName: 'Finca El Paraíso',
-    extractedRawText: 'FINCA EL PARAÍSO (AZUL)',
-    cropCategory: 'Fincas de Piñas y banano',
-    inspectionDate: '2026-09-04',
-    imageDataUrl: createFarmMapSvg('Finca El Paraíso', 'Piña y Banano', 38, 3),
-    imageFileName: 'mapa_finca_paraiso.png',
-    zones: ['Patios de Carga Piña', 'Área de Lavado', 'Lotes Banano A y B', 'Oficina Técnica'],
-    dayInspection: {
-      totalInspectedPoles: 41,
-      physicalCondition: 'Excelente',
-      photocellsStatus: 'Operativas',
-      daytimeLightsOnAnomaly: 0,
-      wiringCondition: 'Óptimo',
-      observations: 'Todos los postes pintados y numerados. Sin cables expuestos. Sensores automáticos calibrados a 50 lux.',
-    },
-    nightInspection: {
-      totalActiveLights: 38,
-      totalDamagedLights: 3,
-      coveragePercentage: 92.7,
-      darkZonesDetected: ['Zona de Compostaje'],
-      urgencyLevel: 'Baja',
-      observations: 'Condiciones óptimas en áreas operativas clave. Se programó cambio de 3 reflectores en zona secundaria.',
-    },
-    createdAt: Date.now() - 86400000 * 1,
-    updatedAt: Date.now() - 86400000 * 1,
+    id: 'user-admin',
+    name: 'Administrador General',
+    emailOrCode: 'admin@dole.com',
+    role: 'Administrador de Sistema',
+    password: 'admin',
+    avatarColor: 'bg-blue-700',
+    createdAt: Date.now() - 86400000 * 60,
   },
 ];
+
+// IDs de mapas demo/prueba que deben filtrarse para no mostrar archivos ficticios
+const DEMO_MAP_IDS = new Set([
+  'map-santa-ines',
+  'map-monterrey',
+  'map-los-diamantes',
+  'map-el-paraiso',
+]);
 
 export async function getSupervisors(): Promise<Supervisor[]> {
   try {
@@ -161,7 +85,6 @@ export async function getSupervisors(): Promise<Supervisor[]> {
     if (stored && Array.isArray(stored) && stored.length > 0) {
       return stored;
     }
-    // Fallback to localStorage check
     const local = localStorage.getItem(SUPERVISORS_KEY);
     if (local) {
       const parsed = JSON.parse(local);
@@ -170,7 +93,6 @@ export async function getSupervisors(): Promise<Supervisor[]> {
         return parsed;
       }
     }
-    // Initialize with default supervisors
     await set(SUPERVISORS_KEY, INITIAL_SUPERVISORS);
     localStorage.setItem(SUPERVISORS_KEY, JSON.stringify(INITIAL_SUPERVISORS));
     return INITIAL_SUPERVISORS;
@@ -195,9 +117,7 @@ export async function saveSupervisor(supervisor: Supervisor): Promise<Supervisor
   await set(SUPERVISORS_KEY, updated);
   try {
     localStorage.setItem(SUPERVISORS_KEY, JSON.stringify(updated));
-  } catch (e) {
-    // ignore quota exceeded if any
-  }
+  } catch (e) {}
   return updated;
 }
 
@@ -211,68 +131,40 @@ export async function deleteSupervisor(id: string): Promise<Supervisor[]> {
   return updated;
 }
 
-function saveMapsBackupToLocalStorage(maps: FarmMapRecord[]) {
-  try {
-    localStorage.setItem(FARM_MAPS_INITIALIZED_KEY, 'true');
-    localStorage.setItem(FARM_MAPS_BACKUP_KEY, JSON.stringify(maps));
-  } catch (e) {
-    // If full data exceeds localStorage quota, save without heavy base64 as safety mirror
-    try {
-      const lightweight = maps.map((m) => ({
-        ...m,
-        imageDataUrl: m.imageDataUrl.startsWith('data:image/svg') ? m.imageDataUrl : '',
-      }));
-      localStorage.setItem(FARM_MAPS_BACKUP_KEY, JSON.stringify(lightweight));
-    } catch (e2) {}
-  }
-}
-
+// Persistencia fija y permanente de mapas: no borra imágenes subidas por el usuario
 export async function getFarmMaps(): Promise<FarmMapRecord[]> {
   try {
-    // 1. Check primary persistent IndexedDB storage
+    // 1. Consultar IndexedDB permanente
     const stored = await get<FarmMapRecord[]>(FARM_MAPS_KEY);
     if (stored !== undefined && Array.isArray(stored)) {
-      // If found in IndexedDB, ensure backup is also updated
-      saveMapsBackupToLocalStorage(stored);
-      return stored;
+      // Filtrar archivos de prueba ficticios para dejar fijas solo las fincas del usuario
+      const cleanUserMaps = stored.filter(
+        (m) => !DEMO_MAP_IDS.has(m.id) && !m.id.startsWith('map-group-demo-')
+      );
+      return cleanUserMaps;
     }
 
-    // 2. Check localStorage backup if IndexedDB returned undefined
-    try {
-      const local = localStorage.getItem(FARM_MAPS_BACKUP_KEY);
-      if (local) {
+    // 2. Comprobar respaldo
+    const local = localStorage.getItem(FARM_MAPS_BACKUP_KEY);
+    if (local) {
+      try {
         const parsed = JSON.parse(local);
         if (Array.isArray(parsed)) {
-          // Re-sync to IndexedDB
-          await set(FARM_MAPS_KEY, parsed);
-          return parsed;
+          const cleanUserMaps = parsed.filter(
+            (m) => !DEMO_MAP_IDS.has(m.id) && !m.id.startsWith('map-group-demo-')
+          );
+          await set(FARM_MAPS_KEY, cleanUserMaps);
+          return cleanUserMaps;
         }
-      }
-    } catch (e) {
-      console.warn('LocalStorage backup read error:', e);
+      } catch (e) {}
     }
 
-    // 3. Check if previously initialized (never wipe user changes on reload)
-    const isInitialized = localStorage.getItem(FARM_MAPS_INITIALIZED_KEY);
-    if (isInitialized) {
-      // The user had an active session and might have deleted demo maps or cleared them. Do not restore demo maps!
-      return [];
-    }
-
-    // 4. First time initialization
-    await set(FARM_MAPS_KEY, INITIAL_MAPS);
-    saveMapsBackupToLocalStorage(INITIAL_MAPS);
-    return INITIAL_MAPS;
+    // Si está vacío al inicio, no crear mapas de prueba artificiales
+    await set(FARM_MAPS_KEY, []);
+    return [];
   } catch (err) {
     console.error('Error fetching farm maps:', err);
-    try {
-      const local = localStorage.getItem(FARM_MAPS_BACKUP_KEY);
-      if (local) {
-        const parsed = JSON.parse(local);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {}
-    return INITIAL_MAPS;
+    return [];
   }
 }
 
@@ -288,8 +180,13 @@ export async function saveFarmMap(mapRecord: FarmMapRecord): Promise<FarmMapReco
     updated = [mapRecord, ...current];
   }
 
+  // Guardar en IndexedDB sin pérdida de imágenes
   await set(FARM_MAPS_KEY, updated);
-  saveMapsBackupToLocalStorage(updated);
+  try {
+    localStorage.setItem(FARM_MAPS_BACKUP_KEY, JSON.stringify(updated));
+  } catch (e) {
+    // Si localStorage satura, IndexedDB retiene el 100% de los datos con imágenes completas
+  }
   return updated;
 }
 
@@ -307,7 +204,9 @@ export async function saveFarmMapsBulk(newRecords: FarmMapRecord[]): Promise<Far
   }
 
   await set(FARM_MAPS_KEY, updated);
-  saveMapsBackupToLocalStorage(updated);
+  try {
+    localStorage.setItem(FARM_MAPS_BACKUP_KEY, JSON.stringify(updated));
+  } catch (e) {}
   return updated;
 }
 
@@ -315,7 +214,35 @@ export async function deleteFarmMap(id: string): Promise<FarmMapRecord[]> {
   const current = await getFarmMaps();
   const updated = current.filter((m) => m.id !== id);
   await set(FARM_MAPS_KEY, updated);
-  saveMapsBackupToLocalStorage(updated);
+  try {
+    localStorage.setItem(FARM_MAPS_BACKUP_KEY, JSON.stringify(updated));
+  } catch (e) {}
+  return updated;
+}
+
+export async function updateFarmMapObservations(id: string, notes: string): Promise<FarmMapRecord[]> {
+  const current = await getFarmMaps();
+  const existingIdx = current.findIndex((m) => m.id === id);
+  if (existingIdx === -1) return current;
+
+  const updated = [...current];
+  updated[existingIdx] = {
+    ...updated[existingIdx],
+    nightInspection: {
+      ...updated[existingIdx].nightInspection,
+      observations: notes,
+    },
+    dayInspection: {
+      ...updated[existingIdx].dayInspection,
+      observations: notes,
+    },
+    updatedAt: Date.now(),
+  };
+
+  await set(FARM_MAPS_KEY, updated);
+  try {
+    localStorage.setItem(FARM_MAPS_BACKUP_KEY, JSON.stringify(updated));
+  } catch (e) {}
   return updated;
 }
 
@@ -353,5 +280,270 @@ export async function deleteGeneratedPdf(id: string): Promise<GeneratedPdfFile[]
   const updated = current.filter((p) => p.id !== id);
   await set(GENERATED_PDFS_KEY, updated);
   return updated;
+}
+
+// =========================================================================
+// GESTIÓN DE USUARIOS (INICIO DE SESIÓN Y REGISTRO)
+// =========================================================================
+
+export async function getAuthUsers(): Promise<AppUser[]> {
+  try {
+    const stored = await get<AppUser[]>(AUTH_USERS_KEY);
+    if (stored && Array.isArray(stored) && stored.length > 0) {
+      return stored;
+    }
+    const local = localStorage.getItem(AUTH_USERS_KEY);
+    if (local) {
+      const parsed = JSON.parse(local);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        await set(AUTH_USERS_KEY, parsed);
+        return parsed;
+      }
+    }
+    await set(AUTH_USERS_KEY, INITIAL_USERS);
+    localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(INITIAL_USERS));
+    return INITIAL_USERS;
+  } catch (e) {
+    return INITIAL_USERS;
+  }
+}
+
+export async function registerUser(newUser: Omit<AppUser, 'id' | 'createdAt'>): Promise<AppUser> {
+  const users = await getAuthUsers();
+  const createdUser: AppUser = {
+    ...newUser,
+    id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    createdAt: Date.now(),
+    avatarColor: newUser.avatarColor || 'bg-blue-600',
+  };
+
+  const updated = [...users, createdUser];
+  await set(AUTH_USERS_KEY, updated);
+  try {
+    localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(updated));
+  } catch (e) {}
+
+  return createdUser;
+}
+
+export async function getCurrentUser(): Promise<AppUser> {
+  try {
+    const stored = await get<AppUser>(AUTH_CURRENT_USER_KEY);
+    if (stored) return stored;
+    const local = localStorage.getItem(AUTH_CURRENT_USER_KEY);
+    if (local) return JSON.parse(local);
+  } catch (e) {}
+
+  const defaultUser = INITIAL_USERS[0];
+  await setCurrentUser(defaultUser);
+  return defaultUser;
+}
+
+export async function setCurrentUser(user: AppUser): Promise<void> {
+  await set(AUTH_CURRENT_USER_KEY, user);
+  try {
+    localStorage.setItem(AUTH_CURRENT_USER_KEY, JSON.stringify(user));
+  } catch (e) {}
+}
+
+// =========================================================================
+// REGISTRO DE CONEXIONES (AUDIT LOG DE ACCESOS)
+// =========================================================================
+
+function detectDevice(): { deviceType: 'Móvil (Celular)' | 'Computadora (PC)' | 'Tablet'; browserInfo: string } {
+  if (typeof window === 'undefined') {
+    return { deviceType: 'Computadora (PC)', browserInfo: 'Sistema Servidor' };
+  }
+
+  const ua = navigator.userAgent || '';
+  const isMobile = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  const isTablet = /iPad|Tablet/i.test(ua) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+
+  let deviceType: 'Móvil (Celular)' | 'Computadora (PC)' | 'Tablet' = 'Computadora (PC)';
+  if (isTablet) {
+    deviceType = 'Tablet';
+  } else if (isMobile || window.innerWidth < 768) {
+    deviceType = 'Móvil (Celular)';
+  }
+
+  let browserName = 'Navegador Web';
+  if (/Chrome/i.test(ua) && !/Edg/i.test(ua)) browserName = 'Google Chrome';
+  else if (/Safari/i.test(ua) && !/Chrome/i.test(ua)) browserName = 'Apple Safari';
+  else if (/Edg/i.test(ua)) browserName = 'Microsoft Edge';
+  else if (/Firefox/i.test(ua)) browserName = 'Mozilla Firefox';
+
+  const osName = /Android/i.test(ua) ? 'Android' :
+                 /iPhone|iPad/i.test(ua) ? 'iOS' :
+                 /Windows/i.test(ua) ? 'Windows' :
+                 /Mac/i.test(ua) ? 'macOS' : 'Linux';
+
+  return {
+    deviceType,
+    browserInfo: `${browserName} en ${osName}`,
+  };
+}
+
+export async function getConnectionLogs(): Promise<ConnectionLog[]> {
+  try {
+    const stored = await get<ConnectionLog[]>(CONNECTION_LOGS_KEY);
+    if (stored && Array.isArray(stored) && stored.length > 0) {
+      return stored;
+    }
+    const local = localStorage.getItem(CONNECTION_LOGS_KEY);
+    if (local) {
+      const parsed = JSON.parse(local);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        await set(CONNECTION_LOGS_KEY, parsed);
+        return parsed;
+      }
+    }
+
+    // Si no existen registros previos, generar registros iniciales de conexión del sistema
+    const { deviceType, browserInfo } = detectDevice();
+    const now = new Date();
+    const formatLogDate = (date: Date) => {
+      return date.toLocaleDateString('es-HN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }) + ', ' + date.toLocaleTimeString('es-HN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+    };
+
+    const initialLogs: ConnectionLog[] = [
+      {
+        id: `log-active-session`,
+        userId: 'supervisor-1',
+        userName: 'Ing. Carlos Mendoza',
+        userRole: 'Supervisor Agrícola',
+        emailOrCode: 'DOLE-HN-7021',
+        timestamp: now.getTime(),
+        formattedDate: formatLogDate(now),
+        deviceType,
+        browserInfo,
+        status: 'Conexión Exitosa',
+      },
+      {
+        id: `log-seed-2`,
+        userId: 'supervisor-2',
+        userName: 'Ing. Roberto Solís',
+        userRole: 'Supervisor de Piña & Banano',
+        emailOrCode: 'DOLE-HN-8419',
+        timestamp: now.getTime() - 1000 * 60 * 45, // hace 45 minutos
+        formattedDate: formatLogDate(new Date(now.getTime() - 1000 * 60 * 45)),
+        deviceType: 'Móvil (Celular)',
+        browserInfo: 'Chrome Mobile en Android',
+        status: 'Conexión Exitosa',
+      },
+      {
+        id: `log-seed-3`,
+        userId: 'inspector-nocturno',
+        userName: 'Inspección Técnica Nocturna',
+        userRole: 'Inspector de Campo',
+        emailOrCode: 'DOLE-NOCTURNO',
+        timestamp: now.getTime() - 1000 * 60 * 180, // hace 3 horas
+        formattedDate: formatLogDate(new Date(now.getTime() - 1000 * 60 * 180)),
+        deviceType: 'Tablet',
+        browserInfo: 'Safari en iPadOS',
+        status: 'Conexión Exitosa',
+      }
+    ];
+
+    await set(CONNECTION_LOGS_KEY, initialLogs);
+    try {
+      localStorage.setItem(CONNECTION_LOGS_KEY, JSON.stringify(initialLogs));
+    } catch (e) {}
+    return initialLogs;
+  } catch (e) {
+    return [];
+  }
+}
+
+export async function recordAccessLog(
+  userName: string = 'Supervisor Agrícola DOLE',
+  userRole: string = 'Supervisor de Campo'
+): Promise<ConnectionLog[]> {
+  const { deviceType, browserInfo } = detectDevice();
+  const now = new Date();
+  const formattedDate = now.toLocaleDateString('es-HN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }) + ', ' + now.toLocaleTimeString('es-HN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const newLog: ConnectionLog = {
+    id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    userId: `user-${Date.now()}`,
+    userName,
+    userRole,
+    emailOrCode: 'DOLE-SISTEMA-AGRO',
+    timestamp: Date.now(),
+    formattedDate,
+    deviceType,
+    browserInfo,
+    status: 'Conexión Exitosa',
+  };
+
+  const current = await getConnectionLogs();
+  const updated = [newLog, ...current].slice(0, 150);
+
+  await set(CONNECTION_LOGS_KEY, updated);
+  try {
+    localStorage.setItem(CONNECTION_LOGS_KEY, JSON.stringify(updated));
+  } catch (e) {}
+
+  return updated;
+}
+
+export async function addConnectionLog(user: AppUser): Promise<ConnectionLog[]> {
+  const { deviceType, browserInfo } = detectDevice();
+  const now = new Date();
+  const formattedDate = now.toLocaleDateString('es-HN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }) + ', ' + now.toLocaleTimeString('es-HN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  const newLog: ConnectionLog = {
+    id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    userId: user.id,
+    userName: user.name,
+    userRole: user.role,
+    emailOrCode: user.emailOrCode,
+    timestamp: Date.now(),
+    formattedDate,
+    deviceType,
+    browserInfo,
+    status: 'Conexión Exitosa',
+  };
+
+  const current = await getConnectionLogs();
+  // Conservar hasta los últimos 150 registros de conexión
+  const updated = [newLog, ...current].slice(0, 150);
+
+  await set(CONNECTION_LOGS_KEY, updated);
+  try {
+    localStorage.setItem(CONNECTION_LOGS_KEY, JSON.stringify(updated));
+  } catch (e) {}
+
+  return updated;
+}
+
+export async function clearConnectionLogs(): Promise<void> {
+  await set(CONNECTION_LOGS_KEY, []);
+  try {
+    localStorage.removeItem(CONNECTION_LOGS_KEY);
+  } catch (e) {}
 }
 

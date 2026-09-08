@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, type ChangeEvent } from 'react';
-import { Supervisor, FarmMapRecord, CropCategory, GeneratedPdfFile } from './types';
+import { useState, useEffect, useRef, useCallback, type ChangeEvent } from 'react';
+import { Supervisor, FarmMapRecord, CropCategory } from './types';
 import { 
   getSupervisors, 
   saveSupervisor, 
@@ -7,44 +7,48 @@ import {
   saveFarmMap, 
   saveFarmMapsBulk,
   deleteFarmMap,
-  getGeneratedPdfs,
-  saveGeneratedPdf,
-  deleteGeneratedPdf
+  updateFarmMapObservations
 } from './services/storage';
 import { generateConsolidatedPdf } from './services/pdfGenerator';
-import { createFarmMapSvg } from './services/mapTemplates';
 import { Navbar } from './components/Navbar';
 import { SupervisorModule } from './components/SupervisorModule';
 import { FarmMapCard } from './components/FarmMapCard';
-import { PdfArchiveModule } from './components/PdfArchiveModule';
 import { AddMapModal } from './components/AddMapModal';
 import { BatchUploadModal } from './components/BatchUploadModal';
 import { AddSupervisorModal } from './components/AddSupervisorModal';
 import { ConsolidatedPdfModal } from './components/ConsolidatedPdfModal';
+import { HelpModal } from './components/HelpModal';
+import { ConnectionLogsModal } from './components/ConnectionLogsModal';
+import { PendingFarmsModal } from './components/PendingFarmsModal';
+import { partitionFarmMaps, isFarmInspectionEdited } from './utils/farmValidation';
 import { getSupervisorTheme } from './utils/theme';
+import { resolveFilesAndZips } from './utils/zipExtractor';
 import { 
   UploadCloud, 
   Search, 
-  Download, 
   Loader2, 
   MapPin, 
   CheckCircle2,
-  Plus,
   Layers,
-  FileText
+  FileDown,
+  Sparkles,
+  Share2,
+  FolderArchive,
+  AlertTriangle,
+  FileEdit
 } from 'lucide-react';
 
 export default function App() {
   const [supervisors, setSupervisors] = useState<Supervisor[]>([]);
   const [farmMaps, setFarmMaps] = useState<FarmMapRecord[]>([]);
-  const [savedPdfs, setSavedPdfs] = useState<GeneratedPdfFile[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Active filters and views
-  const [activeTab, setActiveTab] = useState<'all' | 'supervisors' | 'maps' | 'pdf'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'supervisors' | 'maps'>('all');
   const [selectedSupervisorId, setSelectedSupervisorId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<'ALL' | CropCategory>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [notesFilter, setNotesFilter] = useState<'ALL' | 'READY' | 'OMITTED'>('ALL');
 
   // Modals state
   const [isAddMapOpen, setIsAddMapOpen] = useState(false);
@@ -52,12 +56,17 @@ export default function App() {
   const [batchPreloadedFiles, setBatchPreloadedFiles] = useState<File[]>([]);
   const [isAddSupervisorOpen, setIsAddSupervisorOpen] = useState(false);
   const [isConsolidatedPdfOpen, setIsConsolidatedPdfOpen] = useState(false);
+  const [isPendingFarmsModalOpen, setIsPendingFarmsModalOpen] = useState(false);
   const [modalInitialSupervisor, setModalInitialSupervisor] = useState<Supervisor | null>(null);
+
+  // Modules: Help and Connection Logs
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isLogsOpen, setIsLogsOpen] = useState(false);
 
   // Quick 1-click PDF download loading state
   const [isQuickDownloading, setIsQuickDownloading] = useState(false);
   const [quickNotification, setQuickNotification] = useState<string | null>(null);
-  // Track maps whose PDF has been generated/sent during this session (resets to initial state on app exit)
+  // Track maps whose PDF has been generated/sent during this session
   const [sentPdfMapIds, setSentPdfMapIds] = useState<Set<string>>(new Set());
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
@@ -73,14 +82,12 @@ export default function App() {
     async function loadData() {
       setLoading(true);
       try {
-        const [loadedSupervisors, loadedMaps, loadedPdfs] = await Promise.all([
+        const [loadedSupervisors, loadedMaps] = await Promise.all([
           getSupervisors(),
           getFarmMaps(),
-          getGeneratedPdfs(),
         ]);
         setSupervisors(loadedSupervisors);
         setFarmMaps(loadedMaps);
-        setSavedPdfs(loadedPdfs);
         if (loadedSupervisors.length > 0) {
           setSelectedSupervisorId((prev) => prev || loadedSupervisors[0].id);
         }
@@ -110,6 +117,34 @@ export default function App() {
     notify(`Finca "${newMap.farmName}" guardada y renombrada.`);
   };
 
+  const handleUpdateFarmMapNotes = useCallback(async (id: string, notes: string) => {
+    // 1. Actualizar inmediatamente en memoria para que el PDF unificado contenga las notas actualizadas
+    setFarmMaps((prev) =>
+      prev.map((m) => {
+        if (m.id !== id) return m;
+        return {
+          ...m,
+          nightInspection: {
+            ...m.nightInspection,
+            observations: notes,
+          },
+          dayInspection: {
+            ...m.dayInspection,
+            observations: notes,
+          },
+          updatedAt: Date.now(),
+        };
+      })
+    );
+
+    // 2. Persistir en almacenamiento en segundo plano sin interrumpir ni lanzar notificaciones invasivas
+    try {
+      await updateFarmMapObservations(id, notes);
+    } catch (err) {
+      console.error('Error guardando anotación de finca:', err);
+    }
+  }, []);
+
   const handleSaveBatchMaps = async (newRecords: FarmMapRecord[]) => {
     const updated = await saveFarmMapsBulk(newRecords);
     setFarmMaps(updated);
@@ -122,71 +157,87 @@ export default function App() {
     notify('Mapa eliminado.');
   };
 
-  const handleDeletePdf = async (id: string) => {
-    const updated = await deleteGeneratedPdf(id);
-    setSavedPdfs(updated);
-    notify('Archivo PDF eliminado del módulo.');
-  };
-
-  // 1-Click Fast PDF generation (Zero bureaucracy)
-  const handleQuickConsolidatedPdf = async (supervisorId?: string) => {
+  // Función Principal: UNIR TODOS LOS PDF EN UN DOCUMENTO
+  // En celular abre menú de envío (WhatsApp/Email/Compartir), en PC descarga directa
+  const handleUnirTodosLosPdf = async (supervisorId?: string) => {
     const targetSupervisor = supervisorId 
       ? supervisors.find((s) => s.id === supervisorId) 
       : (selectedSupervisorId ? supervisors.find((s) => s.id === selectedSupervisorId) : supervisors[0]);
 
     if (!targetSupervisor) {
-      alert('No se encontró ningún supervisor.');
+      notify('Por favor seleccione un supervisor primero.');
       return;
     }
 
     const targetMaps = farmMaps.filter((m) => m.supervisorId === targetSupervisor.id);
     if (targetMaps.length === 0) {
-      alert(`No hay mapas registrados para ${targetSupervisor.name}. Sube al menos un mapa.`);
+      notify(`No hay mapas registrados para ${targetSupervisor.name}. Sube fotos de fincas primero.`);
+      return;
+    }
+
+    // DIRECTIVA ESTRICTA: El consolidado PDF solo debe incluir los archivos donde se haya editado el cuadro de diálogo.
+    // Si no se modificó, no lo adjuntes.
+    const { readyMaps, omittedMaps } = partitionFarmMaps(targetMaps);
+
+    if (readyMaps.length === 0) {
+      notify(`Se omitieron las ${omittedMaps.length} fincas porque no tienen editado el cuadro de diálogo. Por favor edítalas para incluirlas en el reporte.`);
+      setIsPendingFarmsModalOpen(true);
       return;
     }
 
     setIsQuickDownloading(true);
     try {
       const today = new Date().toISOString().split('T')[0];
-      const nowTime = new Date().toLocaleTimeString('es-HN', { hour: '2-digit', minute: '2-digit', hour12: true });
+      
+      // Generar PDF consolidado ÚNICAMENTE con los mapas que tienen el cuadro de diálogo editado
       const result = await generateConsolidatedPdf({
         supervisor: targetSupervisor,
-        date: targetMaps[0]?.inspectionDate || today,
-        maps: targetMaps,
-        notes: `Reporte de iluminación consolidado DOLE - ${targetSupervisor.name}.`,
+        date: readyMaps[0]?.inspectionDate || today,
+        maps: readyMaps,
+        notes: `Reporte unificado de iluminación DOLE - ${targetSupervisor.name}. (${readyMaps.length} fincas auditadas)`,
       });
 
-      // Save to PDF Archive module
-      const newPdfFile: GeneratedPdfFile = {
-        id: `pdf-quick-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-        title: targetMaps.length === 1 
-          ? `Reporte Iluminación - ${targetMaps[0].farmName}` 
-          : `Consolidado Iluminación (${targetMaps.length} fincas)`,
-        farmName: targetMaps.length === 1 ? targetMaps[0].farmName : `${targetMaps.length} Fincas`,
-        supervisorId: targetSupervisor.id,
-        supervisorName: targetSupervisor.name,
-        cropCategory: targetSupervisor.category,
-        date: targetMaps[0]?.inspectionDate || today,
-        time: nowTime,
-        filename: result.filename,
-        pdfDataUrl: result.dataUrl,
-        fileSizeBytes: result.blob.size,
-        damagedLightsCount: result.totalDamaged,
-        createdAt: Date.now(),
-      };
-      const updatedPdfs = await saveGeneratedPdf(newPdfFile);
-      setSavedPdfs(updatedPdfs);
+      // Detectar si el dispositivo es móvil/celular/tablet
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth < 768;
 
+      if (isMobile) {
+        // En celular: Intentar abrir menú de envío del sistema (WhatsApp, Gmail, etc.)
+        try {
+          const pdfFile = new File([result.blob], result.filename, { type: 'application/pdf' });
+          if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+            await navigator.share({
+              title: `Reporte Consolidado DOLE - ${targetSupervisor.name}`,
+              text: `Reporte unificado de iluminación con ${readyMaps.length} fincas.`,
+              files: [pdfFile],
+            });
+            notify('Menú de envío completado.');
+            return;
+          }
+        } catch (shareErr: any) {
+          if (shareErr.name === 'AbortError') {
+            notify('Envío cancelado por el usuario.');
+            return;
+          }
+          console.warn('Web Share no disponible, procediendo a descarga normal:', shareErr);
+        }
+      }
+
+      // En PC o si el menú móvil no está disponible: Descarga directa
       const a = document.createElement('a');
       a.href = result.url;
       a.download = result.filename;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      notify(`PDF descargado y guardado en el Módulo de Archivos PDF.`);
+
+      if (omittedMaps.length > 0) {
+        notify(`PDF generado con ${readyMaps.length} fincas editadas (${omittedMaps.length} omitidas sin editar).`);
+      } else {
+        notify(`PDF Unificado descargado con éxito (${readyMaps.length} fincas).`);
+      }
     } catch (e) {
-      console.error('Error generando PDF rápido:', e);
-      alert('No se pudo generar el reporte PDF. Por favor intenta de nuevo.');
+      console.error('Error generando PDF unificado:', e);
+      notify('No se pudo generar el reporte PDF consolidado.');
     } finally {
       setIsQuickDownloading(false);
     }
@@ -213,24 +264,6 @@ export default function App() {
         notes: `Ficha técnica de iluminación para ${mapRecord.farmName}.`,
       });
 
-      // Save to PDF Archive module
-      const newPdfFile: GeneratedPdfFile = {
-        id: `pdf-single-${Date.now()}-${mapRecord.id}`,
-        title: `Reporte Iluminación - ${mapRecord.farmName}`,
-        farmName: mapRecord.farmName,
-        supervisorId: supervisor.id,
-        supervisorName: supervisor.name,
-        cropCategory: supervisor.category,
-        date: mapRecord.inspectionDate || today,
-        time: nowTime,
-        filename: `Ficha_${mapRecord.farmName.replace(/\s+/g, '_')}_${mapRecord.inspectionDate}.pdf`,
-        pdfDataUrl: result.dataUrl,
-        fileSizeBytes: result.blob.size,
-        damagedLightsCount: mapRecord.nightInspection?.totalDamagedLights ?? 0,
-        createdAt: Date.now(),
-      };
-      const updatedPdfs = await saveGeneratedPdf(newPdfFile);
-      setSavedPdfs(updatedPdfs);
       // Mark as sent/downloaded for this session
       setSentPdfMapIds((prev) => new Set(prev).add(mapRecord.id));
 
@@ -240,41 +273,55 @@ export default function App() {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      notify(`Ficha de ${mapRecord.farmName} descargada y guardada en el Módulo de PDFs.`);
+      notify(`Ficha de ${mapRecord.farmName} descargada exitosamente.`);
     } catch (e) {
       console.error('Error generating single PDF:', e);
       alert('No se pudo generar la ficha técnica.');
     }
   };
 
-  // Group file input handler
+  // File ingestion handler (supports individual photos, multiple images, or .zip compressed archives)
+  const processIncomingFiles = async (files: FileList | File[]) => {
+    try {
+      const { imageFiles, extractedCount, zipCount } = await resolveFilesAndZips(files);
+
+      if (imageFiles.length === 0) {
+        if (zipCount > 0) {
+          notify('No se encontraron imágenes (.png, .jpg, .webp) dentro de la carpeta comprimida .ZIP.');
+        } else {
+          notify('Por favor suba imágenes válidas o una carpeta comprimida (.ZIP).');
+        }
+        return;
+      }
+
+      if (zipCount > 0) {
+        notify(`Se extrajeron exitosamente ${extractedCount} imágenes del archivo comprimido.`);
+      }
+
+      if (imageFiles.length === 1 && zipCount === 0) {
+        setModalInitialSupervisor(selectedSupervisor);
+        setIsAddMapOpen(true);
+      } else {
+        setBatchPreloadedFiles(imageFiles);
+        setModalInitialSupervisor(selectedSupervisor);
+        setIsBatchUploadOpen(true);
+      }
+    } catch (err) {
+      console.error('Error al procesar archivos de entrada:', err);
+      notify('Error al descomprimir la carpeta o procesar los archivos.');
+    }
+  };
+
   const handleGroupFilesSelected = (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-
-    if (files.length === 1) {
-      setModalInitialSupervisor(selectedSupervisor);
-      setIsAddMapOpen(true);
-    } else {
-      setBatchPreloadedFiles(Array.from(files));
-      setModalInitialSupervisor(selectedSupervisor);
-      setIsBatchUploadOpen(true);
-    }
+    processIncomingFiles(files);
+    e.target.value = '';
   };
 
   const handleDropFiles = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
-    const validImages = Array.from(fileList).filter((f) => f.type.startsWith('image/'));
-    if (validImages.length === 0) return;
-
-    if (validImages.length === 1) {
-      setModalInitialSupervisor(selectedSupervisor);
-      setIsAddMapOpen(true);
-    } else {
-      setBatchPreloadedFiles(validImages);
-      setModalInitialSupervisor(selectedSupervisor);
-      setIsBatchUploadOpen(true);
-    }
+    processIncomingFiles(fileList);
   };
 
   // Open modals with pre-selected supervisor
@@ -288,7 +335,13 @@ export default function App() {
     setIsConsolidatedPdfOpen(true);
   };
 
-  // Filter farm maps: Strictly separated by active supervisor interface!
+  // Active supervisor maps partitioned by validation status
+  const activeSupervisorMaps = farmMaps.filter((m) =>
+    activeSupervisorId ? m.supervisorId === activeSupervisorId : false
+  );
+  const { readyMaps: activeReadyMaps, omittedMaps: activeOmittedMaps } = partitionFarmMaps(activeSupervisorMaps);
+
+  // Filter farm maps: Strictly separated by active supervisor interface and notes validation!
   const filteredMaps = farmMaps.filter((map) => {
     // STRICT SEPARATION: Only display maps belonging to the active supervisor
     const matchesSupervisor = activeSupervisorId ? map.supervisorId === activeSupervisorId : false;
@@ -298,7 +351,16 @@ export default function App() {
         (map.imageFileName && map.imageFileName.toLowerCase().includes(searchQuery.toLowerCase()))
       : true;
 
-    return matchesSupervisor && matchesCategory && matchesSearch;
+    // Filter by validation status (all, ready/edited, or omitted)
+    const isEdited = isFarmInspectionEdited(map);
+    const matchesNotes = 
+      notesFilter === 'ALL' 
+        ? true 
+        : notesFilter === 'READY' 
+          ? isEdited 
+          : !isEdited;
+
+    return matchesSupervisor && matchesCategory && matchesSearch && matchesNotes;
   });
 
   return (
@@ -313,8 +375,8 @@ export default function App() {
 
       {/* Top Fixed Navigation con selector de interfaz y color reactivo */}
       <Navbar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        activeTab={activeTab === 'pdf' ? 'all' : activeTab}
+        setActiveTab={setActiveTab as any}
         theme={currentTheme}
         supervisors={supervisors}
         selectedSupervisorId={activeSupervisorId}
@@ -334,12 +396,12 @@ export default function App() {
           setModalInitialSupervisor(selectedSupervisor);
           setIsConsolidatedPdfOpen(true);
         }}
-        onQuickDownloadPdf={() => handleQuickConsolidatedPdf()}
+        onQuickDownloadPdf={() => handleUnirTodosLosPdf()}
         isQuickDownloading={isQuickDownloading}
         totalMapsCount={filteredMaps.length}
         totalSupervisorsCount={supervisors.length}
-        savedPdfsCount={savedPdfs.length}
-        onOpenPdfArchive={() => document.getElementById('pdf-archive-module')?.scrollIntoView({ behavior: 'smooth' })}
+        onOpenLogs={() => setIsLogsOpen(true)}
+        onOpenHelp={() => setIsHelpOpen(true)}
       />
 
       {/* Banner de Interfaz de Supervisor Activo */}
@@ -412,13 +474,13 @@ export default function App() {
                 ? 'bg-blue-50/90 border-blue-500 ring-2 ring-blue-400/30'
                 : 'bg-white/85 hover:bg-white border-slate-300/90 hover:border-slate-400 shadow-2xs'
             }`}
-            title="Haga clic o arrastre aquí archivos de imagen"
+            title="Haga clic o arrastre aquí fotos o carpetas comprimidas .ZIP"
           >
             <input
               ref={groupDropInputRef}
               type="file"
               multiple
-              accept="image/*"
+              accept="image/*,.zip,application/zip,application/x-zip-compressed"
               onChange={handleGroupFilesSelected}
               className="hidden"
             />
@@ -429,19 +491,23 @@ export default function App() {
               }`}>
                 <UploadCloud className={`w-3.5 h-3.5 ${isDraggingOver ? 'text-white' : currentTheme.primaryText}`} />
               </div>
-              <div className="flex items-center gap-1.5 truncate">
+              <div className="flex items-center gap-2 truncate">
                 <span className="text-xs font-bold text-slate-800 tracking-tight whitespace-nowrap">
-                  Arrastra aquí el grupo de imágenes
+                  Arrastra aquí fotos o carpetas comprimidas (.ZIP)
                 </span>
-                <span className="text-[11px] text-slate-400 truncate hidden sm:inline">
-                  • Renombrado automático a partir del nombre de archivo
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 shrink-0">
+                  <FolderArchive className="w-3 h-3 text-amber-600" />
+                  <span>Soporta .ZIP</span>
+                </span>
+                <span className="text-[11px] text-slate-400 truncate hidden md:inline">
+                  • Extrae automáticamente imágenes de carpetas PDF o planos
                 </span>
               </div>
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
               <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-md border transition-colors ${currentTheme.badgeBg}`}>
-                Examinar archivos
+                Examinar fotos o .ZIP
               </span>
             </div>
           </div>
@@ -459,12 +525,62 @@ export default function App() {
           onSelectSupervisor={(id) => setSelectedSupervisorId(id)}
           onOpenAddMapForSupervisor={openAddMapForSupervisor}
           onOpenConsolidatedPdfForSupervisor={openConsolidatedPdfForSupervisor}
-          onQuickDownloadPdf={handleQuickConsolidatedPdf}
+          onQuickDownloadPdf={() => handleUnirTodosLosPdf()}
           onOpenAddSupervisor={() => setIsAddSupervisorOpen(true)}
         />
 
         {/* Sección de Fincas */}
         <section id="mapas-section" className="space-y-4">
+          {/* BARRA DE VALIDACIÓN VISUAL DE FINCAS LISTAS VS OMITIDAS */}
+          {activeSupervisorMaps.length > 0 && (
+            <div className={`p-4 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+              activeOmittedMaps.length > 0 
+                ? 'bg-amber-50/80 border-amber-300 ring-1 ring-amber-300/30' 
+                : 'bg-emerald-50/70 border-emerald-300'
+            }`}>
+              <div className="flex items-start sm:items-center gap-2.5">
+                {activeOmittedMaps.length > 0 ? (
+                  <div className="w-8 h-8 rounded-lg bg-amber-200/80 text-amber-900 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                    <AlertTriangle className="w-4 h-4 text-amber-800" />
+                  </div>
+                ) : (
+                  <div className="w-8 h-8 rounded-lg bg-emerald-200/80 text-emerald-900 flex items-center justify-center shrink-0">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-800" />
+                  </div>
+                )}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-extrabold text-slate-900 uppercase tracking-wide">
+                      {activeOmittedMaps.length > 0 
+                        ? `Validación: ${activeOmittedMaps.length} ${activeOmittedMaps.length === 1 ? 'finca omitida' : 'fincas omitidas'} del reporte consolidado`
+                        : 'Validación Completa: Todas las fincas tienen anotaciones'}
+                    </h3>
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white border border-slate-200 text-slate-700">
+                      {activeReadyMaps.length} de {activeSupervisorMaps.length} listas
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    {activeOmittedMaps.length > 0 
+                      ? 'El reporte consolidado solo adjuntará las fincas que tengan el cuadro de diálogo editado. Si no se modificó, no se adjunta.'
+                      : 'Todas las fincas asignadas tienen observaciones escritas y serán incluidas en el PDF consolidado.'}
+                  </p>
+                </div>
+              </div>
+
+              {activeOmittedMaps.length > 0 && (
+                <button
+                  id="btn-open-pending-farms"
+                  onClick={() => setIsPendingFarmsModalOpen(true)}
+                  className="px-3.5 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-xs font-bold shadow-xs hover:shadow transition-all flex items-center justify-center gap-2 shrink-0 cursor-pointer"
+                  title="Ver y editar observaciones de las fincas omitidas"
+                >
+                  <FileEdit className="w-3.5 h-3.5" />
+                  <span>Ver y Editar Fincas Omitidas ({activeOmittedMaps.length})</span>
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">
@@ -477,7 +593,7 @@ export default function App() {
               )}
             </div>
 
-            {/* Filtros simples */}
+            {/* Filtros simples y Filtro de Validación de Cuadro de Diálogo */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
@@ -488,6 +604,45 @@ export default function App() {
                   placeholder="Buscar finca o archivo..."
                   className="pl-7 pr-3 py-1.5 rounded-md border border-slate-200 text-xs font-medium placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-600 bg-white"
                 />
+              </div>
+
+              {/* Filtro por estado de anotación (Validación de diálogo) */}
+              <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                <button
+                  onClick={() => setNotesFilter('ALL')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all ${
+                    notesFilter === 'ALL'
+                      ? 'bg-white text-slate-900 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Ver todas las fincas"
+                >
+                  Todas ({activeSupervisorMaps.length})
+                </button>
+                <button
+                  onClick={() => setNotesFilter('READY')}
+                  className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                    notesFilter === 'READY'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-emerald-800 hover:bg-emerald-100/50'
+                  }`}
+                  title="Ver fincas con anotación listas para el PDF"
+                >
+                  <span>✓ En Reporte ({activeReadyMaps.length})</span>
+                </button>
+                {activeOmittedMaps.length > 0 && (
+                  <button
+                    onClick={() => setNotesFilter('OMITTED')}
+                    className={`px-2 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1 ${
+                      notesFilter === 'OMITTED'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-amber-900 hover:bg-amber-100/50'
+                    }`}
+                    title="Ver fincas omitidas por falta de anotación"
+                  >
+                    <span>⚠️ Omitidas ({activeOmittedMaps.length})</span>
+                  </button>
+                )}
               </div>
 
               <div className="flex items-center gap-1">
@@ -557,30 +712,108 @@ export default function App() {
                   onDownloadSinglePdf={handleDownloadSinglePdf}
                   onDelete={handleDeleteFarmMap}
                   onUpdateMap={handleSaveFarmMap}
+                  onUpdateNotes={handleUpdateFarmMapNotes}
                 />
               ))}
             </div>
           )}
-        </section>
 
-        {/* MÓDULO DE ARCHIVOS PDF GENERADOS CON BOTÓN PARA ENVIAR TODOS JUNTOS */}
-        <PdfArchiveModule
-          savedPdfs={savedPdfs}
-          supervisors={supervisors}
-          selectedSupervisorId={activeSupervisorId || undefined}
-          theme={currentTheme}
-          onDeletePdf={handleDeletePdf}
-        />
+          {/* ========================================================================= */}
+          {/* BOTÓN PRINCIPAL: UNIR TODOS LOS PDF EN UN DOCUMENTO (ROJO, GRANDE)      */}
+          {/* ========================================================================= */}
+          <div className="pt-6 pb-2">
+            <div className="bg-gradient-to-br from-rose-50 to-red-100/60 border-2 border-rose-200/90 rounded-2xl p-5 sm:p-7 text-center shadow-md">
+              <div className="max-w-2xl mx-auto space-y-3">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-100 text-rose-800 text-xs font-bold border border-rose-200">
+                  <Sparkles className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Función Principal de Consolidación</span>
+                </div>
+                <h3 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight">
+                  Generar Documento Único de Supervisión
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-600">
+                  Une en un solo archivo PDF las{' '}
+                  <strong className="text-emerald-700 font-extrabold">{activeReadyMaps.length} fincas listas con anotación</strong> del supervisor.
+                  {activeOmittedMaps.length > 0 && (
+                    <span className="text-amber-800 font-semibold block mt-1">
+                      ({activeOmittedMaps.length} fincas omitidas por no tener el cuadro de diálogo editado)
+                    </span>
+                  )}
+                </p>
+
+                {activeOmittedMaps.length > 0 && (
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsPendingFarmsModalOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-100 text-amber-900 text-xs font-bold border border-amber-300 hover:bg-amber-200 transition-colors cursor-pointer"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Ver {activeOmittedMaps.length} fincas pendientes para editarlas y reenviarlas</span>
+                    </button>
+                  </div>
+                )}
+
+                <div className="pt-2">
+                  <button
+                    id="btn-unir-todos-los-pdf-principal"
+                    disabled={isQuickDownloading || activeSupervisorMaps.length === 0}
+                    onClick={() => handleUnirTodosLosPdf()}
+                    className="w-full sm:w-auto min-w-[300px] sm:min-w-[440px] py-4 px-8 rounded-2xl bg-red-600 hover:bg-red-700 active:bg-red-800 text-white font-black text-base sm:text-lg tracking-wide shadow-xl hover:shadow-2xl active:scale-[0.99] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3 border border-red-500 mx-auto select-none cursor-pointer"
+                  >
+                    {isQuickDownloading ? (
+                      <>
+                        <Loader2 className="w-6 h-6 animate-spin text-white" />
+                        <span>UNIFICANDO DOCUMENTOS VALIDADOS...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileDown className="w-6 h-6 text-white" />
+                        <span>
+                          {activeReadyMaps.length > 0 
+                            ? `UNIR ${activeReadyMaps.length} FINCAS CON ANOTACIÓN EN UN PDF` 
+                            : 'UNIR TODOS LOS PDF EN UN DOCUMENTO'}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                <div className="pt-2 flex flex-wrap items-center justify-center gap-3 text-[11px] text-slate-500 font-medium">
+                  <span className="flex items-center gap-1">
+                    📱 <strong>En celular:</strong> Abre menú de envío (WhatsApp, Correo, Drive)
+                  </span>
+                  <span className="text-slate-300 hidden sm:inline">•</span>
+                  <span className="flex items-center gap-1">
+                    💻 <strong>En PC:</strong> Descarga directa a su carpeta de archivos
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
 
-      {/* Footer Minimalista */}
-      <footer className="bg-white border-t border-slate-200 py-3 text-slate-400 text-[11px] mt-auto">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>DOLE • Control de Iluminación de Fincas</span>
-          <span className="flex items-center gap-1 text-slate-500">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-            Nombre tomado del archivo de cada foto
-          </span>
+      {/* Footer Minimalista con Protección contra entrenamiento de IA */}
+      <footer className="bg-white border-t border-slate-200 py-4 text-slate-500 text-xs mt-auto">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-2">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2">
+            <span className="font-bold text-slate-700">DOLE • Control de Iluminación de Fincas</span>
+            <span className="flex items-center gap-1.5 text-slate-500 text-xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+              <span>Imágenes fijas y permanentes en el almacenamiento del dispositivo</span>
+            </span>
+          </div>
+          
+          {/* Cláusula de protección de código contra entrenamiento de IA */}
+          <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-1 text-[10px] text-slate-400">
+            <p className="tracking-tight">
+              Código fuente y datos protegidos contra minería de datos y entrenamiento de IA (NoAI / NoImageAI).
+            </p>
+            <p className="font-mono text-[9px]">
+              © {new Date().getFullYear()} DOLE Tropical Products • Propiedad Intelectual Protegida
+            </p>
+          </div>
         </div>
       </footer>
 
@@ -620,11 +853,32 @@ export default function App() {
         supervisors={supervisors}
         farmMaps={farmMaps}
         initialSupervisor={modalInitialSupervisor}
-        onSavePdfToArchive={async (newPdf) => {
-          const updated = await saveGeneratedPdf(newPdf);
-          setSavedPdfs(updated);
-          notify('Reporte PDF guardado en el módulo de archivos.');
+        onUpdateNotes={handleUpdateFarmMapNotes}
+      />
+
+      {/* Modal de Validación y Edición de Fincas Omitidas/Pendientes */}
+      <PendingFarmsModal
+        isOpen={isPendingFarmsModalOpen}
+        onClose={() => setIsPendingFarmsModalOpen(false)}
+        farmMaps={activeSupervisorMaps}
+        supervisorName={selectedSupervisor?.name || 'Supervisor'}
+        onUpdateNotes={handleUpdateFarmMapNotes}
+        onGeneratePdf={() => {
+          setIsPendingFarmsModalOpen(false);
+          handleUnirTodosLosPdf();
         }}
+      />
+
+      {/* Módulo de Ayuda didáctica */}
+      <HelpModal
+        isOpen={isHelpOpen}
+        onClose={() => setIsHelpOpen(false)}
+      />
+
+      {/* Módulo de Registro de Conexiones */}
+      <ConnectionLogsModal
+        isOpen={isLogsOpen}
+        onClose={() => setIsLogsOpen(false)}
       />
     </div>
   );

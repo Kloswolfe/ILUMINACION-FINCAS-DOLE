@@ -7,6 +7,7 @@ import {
 import { createFarmMapSvg } from '../services/mapTemplates';
 import { extractFarmNameFromFileName, deriveCleanFileName } from '../utils/farmName';
 import { optimizeImageDataUrl } from '../utils/imageUtils';
+import { resolveFilesAndZips } from '../utils/zipExtractor';
 import { 
   X, 
   UploadCloud, 
@@ -15,7 +16,9 @@ import {
   FileText, 
   Layers, 
   ArrowRight,
-  ImageIcon
+  ImageIcon,
+  FolderArchive,
+  Loader2
 } from 'lucide-react';
 import { ThemeConfig } from '../utils/theme';
 
@@ -87,44 +90,63 @@ export function AddMapModal({
     }
   };
 
-  // Process files (single or multiple in group) using the file name directly
+  // Process files (single, multiple in group, or .zip archive) using the file name directly
   const handleFilesSelected = async (files: FileList | File[]) => {
     setError(null);
-    const fileArray = Array.from(files);
-    if (fileArray.length === 0) return;
+    const rawList = Array.from(files);
+    if (rawList.length === 0) return;
 
     setIsReadingFiles(true);
 
-    const newIncomingItems: MapUploadItem[] = [];
-    for (let i = 0; i < fileArray.length; i++) {
-      const file = fileArray[i];
-      const rawDataUrl = await new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.readAsDataURL(file);
-      });
-      const dataUrl = await optimizeImageDataUrl(rawDataUrl);
+    try {
+      // Extrae imágenes de archivos comprimidos .zip (incluso si están dentro de subcarpetas como pdf/)
+      const { imageFiles, extractedCount, zipCount } = await resolveFilesAndZips(rawList);
 
-      // Directly extract the farm name from the uploaded image's file name
-      const farmName = extractFarmNameFromFileName(file.name);
-      const isPineapple = 
-        file.name.toLowerCase().includes('piña') || 
-        file.name.toLowerCase().includes('pina') || 
-        currentSupervisor?.category.includes('Piña');
+      if (imageFiles.length === 0) {
+        if (zipCount > 0) {
+          setError('No se encontraron imágenes compatibles (.png, .jpg, .webp) dentro del archivo comprimido.');
+        } else {
+          setError('No se encontraron archivos de imagen válidos.');
+        }
+        setIsReadingFiles(false);
+        return;
+      }
 
-      newIncomingItems.push({
-        id: `map-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${i}`,
-        originalFileName: file.name,
-        dataUrl,
-        farmName,
-        renamedFileName: deriveCleanFileName(farmName, file.name),
-        status: 'done',
-        cropCategory: isPineapple ? 'Fincas de Piñas y banano' : (currentSupervisor?.category || 'Fincas de Banano'),
-      });
+      const newIncomingItems: MapUploadItem[] = [];
+      for (let i = 0; i < imageFiles.length; i++) {
+        const file = imageFiles[i];
+        const rawDataUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+        const dataUrl = await optimizeImageDataUrl(rawDataUrl);
+
+        // Directly extract the farm name from the uploaded image's file name
+        const farmName = extractFarmNameFromFileName(file.name);
+        const isPineapple = 
+          file.name.toLowerCase().includes('piña') || 
+          file.name.toLowerCase().includes('pina') || 
+          currentSupervisor?.category.includes('Piña');
+
+        newIncomingItems.push({
+          id: `map-item-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${i}`,
+          originalFileName: file.name,
+          dataUrl,
+          farmName,
+          renamedFileName: deriveCleanFileName(farmName, file.name),
+          status: 'done',
+          cropCategory: isPineapple ? 'Fincas de Piñas y banano' : (currentSupervisor?.category || 'Fincas de Banano'),
+        });
+      }
+
+      setItems((prev) => [...prev, ...newIncomingItems]);
+    } catch (err: any) {
+      console.error('Error procesando archivos o comprimidos:', err);
+      setError('Ocurrió un error al procesar las imágenes o descomprimir la carpeta.');
+    } finally {
+      setIsReadingFiles(false);
     }
-
-    setItems((prev) => [...prev, ...newIncomingItems]);
-    setIsReadingFiles(false);
   };
 
   const handleFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -383,24 +405,33 @@ export function AddMapModal({
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept="image/*"
+                accept="image/*,.zip,application/zip,application/x-zip-compressed"
                 onChange={handleFileInputChange}
                 className="hidden"
               />
 
               <div className="py-1 space-y-1.5">
-                <div className="relative inline-block">
-                  <UploadCloud className="w-8 h-8 text-slate-400 mx-auto" />
-                  <Layers className="w-3.5 h-3.5 text-blue-600 absolute -bottom-1 -right-1 bg-white rounded-full" />
+                <div className="flex items-center justify-center gap-2">
+                  <div className="relative inline-block">
+                    <UploadCloud className="w-7 h-7 text-slate-400 mx-auto" />
+                    <Layers className="w-3.5 h-3.5 text-blue-600 absolute -bottom-1 -right-1 bg-white rounded-full" />
+                  </div>
+                  <FolderArchive className="w-6 h-6 text-amber-500" />
                 </div>
                 <p className="text-xs font-bold text-slate-800">
                   {items.length > 0 
-                    ? 'Haz clic o arrastra más imágenes para añadirlas al grupo' 
-                    : 'Haz clic o arrastra las fotos o imágenes del mapa aquí'}
+                    ? 'Haz clic o arrastra más fotos o carpetas comprimidas (.ZIP)' 
+                    : 'Haz clic o arrastra fotos individuales o carpetas comprimidas (.ZIP) aquí'}
                 </p>
-                <p className="text-[11px] text-slate-500">
-                  Soporta subida individual o en <strong>grupo (múltiples fotos simultáneas)</strong>. Cada finca toma automáticamente el nombre de su archivo.
+                <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+                  Soporta imágenes individuales, grupos o archivos <strong>.ZIP con carpetas de planos/imágenes (ej. carpeta PDF)</strong>. La app descomprime y extrae todas las imágenes automáticamente.
                 </p>
+                {isReadingFiles && (
+                  <div className="mt-2 flex items-center justify-center gap-1.5 text-xs font-bold text-blue-600 animate-pulse">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Descomprimiendo y procesando imágenes...</span>
+                  </div>
+                )}
               </div>
             </div>
 

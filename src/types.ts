@@ -71,3 +71,26 @@ export interface GeneratedPdfFile {
   createdAt: number;
 }
 
+export interface AppUser {
+  id: string;
+  name: string;
+  emailOrCode: string;
+  role: string;
+  password?: string;
+  avatarColor?: string;
+  createdAt: number;
+}
+
+export interface ConnectionLog {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  emailOrCode: string;
+  timestamp: number;
+  formattedDate: string;
+  deviceType: 'Móvil (Celular)' | 'Computadora (PC)' | 'Tablet';
+  browserInfo: string;
+  status: 'Conexión Exitosa';
+}
+

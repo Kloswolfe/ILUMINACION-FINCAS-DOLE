@@ -7,6 +7,7 @@ export interface ConsolidatedReportOptions {
   maps: FarmMapRecord[];
   notes?: string;
   inspectionTime?: string;
+  loggedUserName?: string;
 }
 
 export interface GeneratedPdfResult {
@@ -68,7 +69,7 @@ async function getImagePngData(dataUrl: string): Promise<{ dataUrl: string; widt
 export async function generateConsolidatedPdf(
   options: ConsolidatedReportOptions
 ): Promise<GeneratedPdfResult> {
-  const { supervisor, date, maps, notes, inspectionTime } = options;
+  const { supervisor, date, maps, notes, inspectionTime, loggedUserName } = options;
 
   // Standard A4: 210 x 297 mm
   const doc = new jsPDF({
@@ -174,14 +175,16 @@ export async function generateConsolidatedPdf(
 
     // Columna 3: Nombre del Supervisor que Reporta
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
+    doc.setFontSize(7);
     doc.setTextColor(100, 116, 139);
-    doc.text('SUPERVISOR QUE REPORTA:', 116, metaY + 6.5);
+    doc.text(loggedUserName ? 'SUPERVISOR / USUARIO:' : 'SUPERVISOR QUE REPORTA:', 116, metaY + 6.5);
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9.5);
+    doc.setFontSize(8.5);
     doc.setTextColor(DOLE_NAVY[0], DOLE_NAVY[1], DOLE_NAVY[2]);
-    const supDisplayName = `${supervisor.name} (${supervisor.employeeCode || 'DOLE'})`;
+    const supDisplayName = loggedUserName
+      ? `${supervisor.name} • ${loggedUserName}`
+      : `${supervisor.name} (${supervisor.employeeCode || 'DOLE'})`;
     doc.text(supDisplayName, 116, metaY + 13.5);
 
     // Separadores verticales sutiles
@@ -235,14 +238,6 @@ export async function generateConsolidatedPdf(
       doc.text('[ Vista de Imagen de Mapa de la Finca ]', 65, mapY + 80);
     }
 
-    // Etiqueta sutil en la esquina inferior del marco de la imagen
-    if (farm.imageFileName) {
-      doc.setFontSize(7);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(148, 163, 184);
-      doc.text(`Archivo fuente: ${farm.imageFileName}`, 17, mapY + mapHeight - 3);
-    }
-
     // =========================================================================
     // 6. ANOTACIONES DE LA INSPECCIÓN (ESCRITAS POR EL USUARIO)
     // =========================================================================
@@ -261,21 +256,21 @@ export async function generateConsolidatedPdf(
     doc.setTextColor(DOLE_NAVY[0], DOLE_NAVY[1], DOLE_NAVY[2]);
     doc.text('ANOTACIONES DE LA INSPECCIÓN:', 18, notesY + 7);
 
-    // Contenido escrito por el usuario en las observaciones
+    // Contenido escrito por el usuario en las observaciones (mediano y en negrita)
     const userNotesText = (farm.nightInspection?.observations || notes || '').trim();
     const displayNotes = userNotesText.length > 0 
       ? userNotesText 
       : 'Inspección de iluminación y condiciones del sector registradas conforme a normas técnicas.';
 
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(51, 65, 85); // slate-700
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(15, 23, 42); // slate-900 para máxima legibilidad profesional
     
     // Divide el texto automáticamente para que encaje de forma limpia dentro del cuadro
     const splitNotes = doc.splitTextToSize(displayNotes, notesWidth - 10);
-    const maxLines = 3;
+    const maxLines = 4;
     const linesToPrint = splitNotes.slice(0, maxLines);
-    doc.text(linesToPrint, 18, notesY + 14);
+    doc.text(linesToPrint, 18, notesY + 14, { lineHeightFactor: 1.35 });
 
     // =========================================================================
     // 7. PIE DE PÁGINA INSTITUCIONAL PROFESIONAL
@@ -293,7 +288,10 @@ export async function generateConsolidatedPdf(
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(148, 163, 184);
     doc.text('Documento Oficial de Supervisión Agrícola • División Tropical DOLE', 14, footY + 5);
-    doc.text(`Registro Digital: ${supervisor.name} • ${date} ${reportTime}`, 128, footY + 5);
+    const auditSig = loggedUserName 
+      ? `Registro Digital: ${supervisor.name} (Por: ${loggedUserName}) • ${date} ${reportTime}`
+      : `Registro Digital: ${supervisor.name} • ${date} ${reportTime}`;
+    doc.text(auditSig, 110, footY + 5);
   }
 
   const cleanSupervisorName = supervisor.name.toLowerCase().replace(/\s+/g, '_');

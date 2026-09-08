@@ -3,20 +3,19 @@ import {
   Users, 
   MapPin, 
   PlusCircle, 
-  Download,
   Loader2, 
   Menu, 
   X,
   Layers,
-  UserCheck,
-  FileText
+  HelpCircle,
+  History
 } from 'lucide-react';
 import { ThemeConfig } from '../utils/theme';
 import { Supervisor } from '../types';
 
 interface NavbarProps {
-  activeTab: 'all' | 'supervisors' | 'maps' | 'pdf';
-  setActiveTab: (tab: 'all' | 'supervisors' | 'maps' | 'pdf') => void;
+  activeTab: 'all' | 'supervisors' | 'maps';
+  setActiveTab: (tab: 'all' | 'supervisors' | 'maps') => void;
   theme: ThemeConfig;
   supervisors?: Supervisor[];
   selectedSupervisorId?: string | null;
@@ -30,8 +29,8 @@ interface NavbarProps {
   isQuickDownloading?: boolean;
   totalMapsCount: number;
   totalSupervisorsCount: number;
-  savedPdfsCount?: number;
-  onOpenPdfArchive?: () => void;
+  onOpenLogs?: () => void;
+  onOpenHelp?: () => void;
 }
 
 export function Navbar({
@@ -50,12 +49,12 @@ export function Navbar({
   isQuickDownloading = false,
   totalMapsCount,
   totalSupervisorsCount,
-  savedPdfsCount = 0,
-  onOpenPdfArchive,
+  onOpenLogs,
+  onOpenHelp,
 }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const scrollToSection = (id: string, tab?: 'all' | 'supervisors' | 'maps' | 'pdf') => {
+  const scrollToSection = (id: string, tab?: 'all' | 'supervisors' | 'maps') => {
     if (tab) setActiveTab(tab);
     setMobileMenuOpen(false);
     const element = document.getElementById(id);
@@ -68,7 +67,7 @@ export function Navbar({
     <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs transition-colors duration-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14 gap-4">
-          {/* Logo y marca DOLE con color dinámico según el supervisor */}
+          {/* Logo y marca DOLE */}
           <div 
             onClick={() => scrollToSection('supervisores-section', 'supervisors')}
             className="flex items-center gap-2.5 cursor-pointer group select-none shrink-0"
@@ -93,7 +92,7 @@ export function Navbar({
             </div>
           </div>
 
-          {/* Selector de Interfaz Rápido en la Barra Superior (Ronnie vs Jason) */}
+          {/* Selector de Interfaz Rápido en la Barra Superior */}
           <div className="hidden lg:flex items-center gap-1.5 p-1 bg-slate-100 rounded-lg border border-slate-200/80">
             {supervisors.map((sup) => {
               const isActive = sup.id === selectedSupervisorId;
@@ -104,7 +103,7 @@ export function Navbar({
                   key={sup.id}
                   id={`nav-btn-interface-${sup.id}`}
                   onClick={() => onSelectSupervisor && onSelectSupervisor(sup.id)}
-                  className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                     isActive 
                       ? isPineapple 
                         ? 'bg-amber-600 text-white shadow-xs' 
@@ -122,104 +121,64 @@ export function Navbar({
             })}
           </div>
 
-          {/* Acciones directas */}
+          {/* Acciones directas (Desktop) */}
           <div className="hidden sm:flex items-center gap-2 shrink-0">
+            {/* Botón de Ayuda explicativa */}
+            <button
+              id="header-btn-help"
+              onClick={onOpenHelp}
+              className="px-2.5 py-1.5 rounded-md border border-amber-200 bg-amber-50/80 hover:bg-amber-100 text-amber-900 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Guía fácil de cómo funciona la aplicación"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-amber-600" />
+              <span>Ayuda</span>
+            </button>
+
+            {/* Botón de Registro de Conexiones */}
+            <button
+              id="header-btn-connection-logs"
+              onClick={onOpenLogs}
+              className="px-2.5 py-1.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Ver registro de quién se ha conectado a la aplicación"
+            >
+              <History className="w-3.5 h-3.5 text-blue-600" />
+              <span>Conexiones</span>
+            </button>
+
+            {/* Botón Subir Mapas */}
             <button
               id="header-btn-upload-maps"
               onClick={onOpenBatchUpload}
-              className={`px-3 py-1.5 rounded-md text-white text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 ${theme.buttonBg}`}
-              title="Subir imágenes de mapas (individual o grupo)"
+              className={`px-3 py-1.5 rounded-md text-white text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer ${theme.buttonBg}`}
+              title="Subir imágenes de mapas o carpetas comprimidas .ZIP"
             >
               <Layers className="w-3.5 h-3.5 text-white" />
-              <span>Subir Mapas</span>
-            </button>
-
-            {/* Botón Módulo de Archivos PDF */}
-            <button
-              id="header-btn-archive-pdfs"
-              onClick={() => {
-                if (onOpenPdfArchive) {
-                  onOpenPdfArchive();
-                } else {
-                  document.getElementById('pdf-archive-module')?.scrollIntoView({ behavior: 'smooth' });
-                }
-              }}
-              className="px-2.5 py-1.5 rounded-md border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-900 text-xs font-semibold transition-colors flex items-center gap-1.5"
-              title="Ir al módulo de archivos PDF generados"
-            >
-              <FileText className="w-3.5 h-3.5 text-blue-600" />
-              <span>Módulo PDFs</span>
-              {savedPdfsCount > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full bg-blue-600 text-white text-[10px] font-bold">
-                  {savedPdfsCount}
-                </span>
-              )}
-            </button>
-
-            {/* Descarga en 1 clic */}
-            <button
-              id="header-btn-consolidated-pdf"
-              disabled={isQuickDownloading}
-              onClick={() => {
-                if (onQuickDownloadPdf) {
-                  onQuickDownloadPdf();
-                } else {
-                  onOpenConsolidatedPdf();
-                }
-              }}
-              className="px-3 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-md shadow-xs hover:bg-slate-800 disabled:opacity-50 transition-colors flex items-center gap-1.5"
-              title="Descargar reporte consolidado en PDF de este supervisor"
-            >
-              {isQuickDownloading ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-300" />
-                  <span>Generando...</span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-3.5 h-3.5 text-slate-300" />
-                  <span>PDF Consolidado</span>
-                </>
-              )}
+              <span>Subir Mapas (.ZIP)</span>
             </button>
           </div>
 
           {/* Menú móvil */}
           <div className="flex sm:hidden items-center gap-1.5">
             <button
-              onClick={() => {
-                if (onOpenPdfArchive) {
-                  onOpenPdfArchive();
-                } else {
-                  document.getElementById('pdf-archive-module')?.scrollIntoView({ behavior: 'smooth' });
-                }
-              }}
-              className="p-1.5 rounded-md bg-blue-50 border border-blue-200 text-blue-800 text-xs relative"
-              title="Módulo PDFs"
+              onClick={onOpenHelp}
+              className="p-1.5 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-xs"
+              title="Ayuda"
             >
-              <FileText className="w-4 h-4" />
-              {savedPdfsCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-blue-600 text-white text-[9px] font-bold flex items-center justify-center">
-                  {savedPdfsCount}
-                </span>
-              )}
+              <HelpCircle className="w-4 h-4 text-amber-600" />
+            </button>
+            <button
+              onClick={onOpenLogs}
+              className="p-1.5 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-xs"
+              title="Conexiones"
+            >
+              <History className="w-4 h-4 text-blue-600" />
             </button>
             <button
               onClick={onOpenBatchUpload}
-              className={`p-1.5 rounded-md text-white text-xs ${theme.primaryBg}`}
-              title="Subir Grupo"
+              className={`p-1.5 rounded-md text-white text-xs ${theme.buttonBg}`}
+              title="Subir Mapas o Carpeta .ZIP"
             >
               <Layers className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => {
-                if (onQuickDownloadPdf) onQuickDownloadPdf();
-                else onOpenConsolidatedPdf();
-              }}
-              className="p-1.5 rounded-md bg-slate-900 text-white text-xs"
-              title="Descargar PDF"
-            >
-              <Download className="w-4 h-4" />
             </button>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
@@ -263,25 +222,36 @@ export function Navbar({
             </div>
           </div>
 
-          <div className="pt-2 border-t border-slate-100 flex gap-2">
+          <div className="pt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                if (onOpenHelp) onOpenHelp();
+              }}
+              className="py-2 bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold rounded-lg flex items-center justify-center gap-1"
+            >
+              <HelpCircle className="w-3.5 h-3.5 text-amber-600" />
+              <span>Ayuda Fácil</span>
+            </button>
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                if (onOpenLogs) onOpenLogs();
+              }}
+              className="py-2 bg-slate-100 border border-slate-200 text-slate-800 text-xs font-semibold rounded-lg flex items-center justify-center gap-1"
+            >
+              <History className="w-3.5 h-3.5 text-blue-600" />
+              <span>Conexiones</span>
+            </button>
             <button
               onClick={() => {
                 setMobileMenuOpen(false);
                 onOpenBatchUpload();
               }}
-              className={`flex-1 py-2 text-white text-xs font-semibold rounded ${theme.buttonBg}`}
+              className={`col-span-2 py-2 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 ${theme.buttonBg}`}
             >
-              + Subir Grupo
-            </button>
-            <button
-              onClick={() => {
-                setMobileMenuOpen(false);
-                if (onQuickDownloadPdf) onQuickDownloadPdf();
-                else onOpenConsolidatedPdf();
-              }}
-              className="flex-1 py-2 bg-slate-900 text-white text-xs font-semibold rounded"
-            >
-              PDF Consolidado
+              <Layers className="w-3.5 h-3.5" />
+              <span>+ Subir Fotos o Carpeta .ZIP</span>
             </button>
           </div>
         </div>
@@ -289,4 +259,3 @@ export function Navbar({
     </header>
   );
 }
-
